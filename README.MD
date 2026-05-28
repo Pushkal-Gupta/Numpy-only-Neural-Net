@@ -185,8 +185,10 @@ Frameworks like TensorFlow and PyTorch are industry standards for production opt
 
 **Pushkal Gupta**
 
+Kaggle:
+[MNIST Digits Notebook](https://www.kaggle.com/code/pushkalg/mnist-from-scratch-only-numpy)
+
 GitHub: [Pushkal-Gupta](https://github.com/Pushkal-Gupta)
-Kaggle: [Kaggle Notebook](https://www.kaggle.com/code/pushkalg/mnist-from-scratch-only-numpy)
 
 ---
 
