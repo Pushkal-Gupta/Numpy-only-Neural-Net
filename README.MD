@@ -379,8 +379,8 @@ The dataset CSVs are tracked with Git LFS. If `git clone` does not pull them aut
 
 The roadmap for turning this implementation into a more general scratch-built deep learning library:
 
-- ✅ **Initialization:** ~~Replace uniform `[-0.5, 0.5]` initialization with He initialization for ReLU layers~~ — done in the Letter Recognition notebook
-- ✅ **Architecture:** ~~Support dynamic layer specification so a new architecture is one list change away~~ — done in the Letter Recognition notebook; the passes now loop over parameter lists
+- **Initialization:** Replace uniform `[-0.5, 0.5]` initialization with He initialization for ReLU layers — done in the Letter Recognition notebook
+- **Architecture:** Support dynamic layer specification so a new architecture is one list change away — done in the Letter Recognition notebook; the passes now loop over parameter lists
 - **Optimization:** Implement momentum, RMSProp, and Adam
 - **Regularization:** Add dropout and L2 weight decay
 - **Persistence:** Add weight serialization for saving and loading trained networks
