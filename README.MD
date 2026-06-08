@@ -6,6 +6,8 @@ This repository exists to make the internals of deep learning legible. Every mat
 
 The project is structured as a progression. The first notebook (MNIST Handwritten Digits) is written as a teaching document — heavy markdown explanations, derivations of the math, and inline reasoning behind every matrix shape. The second notebook (Fashion MNIST) is the same engine extended one layer deeper and trained with mini-batch gradient descent, written under the philosophy that *code is the ultimate source of truth*. The third notebook (Letter Recognition) turns the engine into a dynamic MLP. The forward, backward, and update passes now loop over a list of layers instead of hard-coding each one, so the depth no longer lives inside those passes. The one exception is `init_params`, which still writes the layers out by hand on purpose, because it reads more clearly that way. This notebook also switches to He initialization and reshuffles the data before every epoch.
 
+The fourth notebook (ECG Heartbeat Recognition) puts that dynamic engine to work on transfer learning. A deep seven-layer network is trained to classify arrhythmias from ECG signals, and then its learned feature layers are frozen and reused as a feature extractor: a tiny new head is trained on top of them to detect myocardial infarction on a completely different ECG dataset. This follows the setup from the paper the dataset comes with (*ECG Heartbeat Classification: A Deep Transferable Representation*, Kachuee et al., 2018), and shows the whole thing was implemented with nothing but the NumPy primitives built up across the first three notebooks.
+
 ---
 
 ## Recommended Reading Order
@@ -55,6 +57,22 @@ What's new here:
 - Input is 16 features rather than flattened pixels
 - A one-hot encoder that maps each letter through `ord(c) - ord('A')`
 
+### 4. Then → `ECG Heartbeat Recognition/ECG_Heartbeat_Detection.ipynb`
+
+This is the first notebook that does something other than train one network end to end. It reuses the dynamic engine from Letter Recognition unchanged and applies it to **transfer learning** on ECG signals, following the recipe in the dataset's source paper.
+
+It runs in two stages:
+
+1. **Source task** — a deep `187 → 512 → 256 → 128 → 64 → 32 → 16 → 5` network is trained on the MIT-BIH arrhythmia dataset to sort each heartbeat into one of five rhythm classes.
+2. **Transfer** — the early layers of that trained network (everything up to the 32-feature layer) are frozen and treated as a fixed feature extractor. A small `32 → 20 → 10 → 2` head is then trained on those features to detect myocardial infarction on the PTB dataset, which the base network never saw.
+
+What's new here:
+
+- **Transfer learning by feature extraction** — the frozen layers are run once as a forward pass to turn each PTB heartbeat into a 32-dimensional feature vector, and only the new head is trained on top
+- A neat trick for reusing the existing `forward_pass`: it always softmaxes the last layer, so to read off the ReLU'd 32-feature layer instead, one extra layer is included in the pass and its softmax output is simply thrown away (`aArr[-2]`)
+- A **confusion matrix** built by hand to see *which* classes get confused, not just the overall accuracy
+- Two binary/multi-class ECG datasets with a fixed 187-sample signal length, merged and shuffled for the binary task
+
 ---
 
 ## Architecture
@@ -98,6 +116,31 @@ The deeper architecture for Fashion MNIST is intentional. Fashion images are vis
 
 This architecture is not hard-coded the way the first two are. It is produced by `init_params`, and the forward and backward passes loop over the resulting parameter lists, so swapping in a different depth requires editing only the initializer.
 
+### ECG Heartbeat Recognition
+
+**Source network (MIT-BIH, 5-class arrhythmia):**
+
+```text
+187 -> 512 -> 256 -> 128 -> 64 -> 32 -> 16 -> 5
+```
+
+- Input layer: 187 neurons (the 187 signal samples of one segmented heartbeat)
+- Six hidden layers, ReLU, narrowing from 512 down to 16
+- Output layer: 5 neurons, Softmax (`N`, `S`, `V`, `F`, `Q`)
+
+**Transfer head (PTB, binary MI detection):**
+
+```text
+[ 187 -> 512 -> 256 -> 128 -> 64 -> 32 ]  ->  20 -> 10 -> 2
+        (frozen, reused as feature extractor)      (trained from scratch)
+```
+
+- The bracketed layers are taken from the trained source network and frozen — their weights are never updated again
+- Each PTB heartbeat is pushed through them once to produce a 32-dimensional feature vector
+- A fresh `32 → 20 → 10 → 2` head is trained on those vectors to output normal vs. abnormal
+
+The depth here is the same dynamic-list construction as Letter Recognition — the source network just happens to be seven weight layers deep instead of four. The transfer head is a second, independent parameter list, and the final assembled classifier is literally `wArr[0:5] + ptbdb_wArr` concatenated together.
+
 ---
 
 ## Features
@@ -113,6 +156,9 @@ This architecture is not hard-coded the way the first two are. It is produced by
 - Pixel normalization to the `[0, 1]` range (image notebooks)
 - Per-epoch accuracy logging
 - Inline visualization of individual predictions using Matplotlib
+- **Transfer learning via feature extraction** (ECG notebook) — frozen early layers reused as a feature extractor, with only a small new head trained on top of the extracted features
+- **A hand-written confusion matrix** (ECG notebook) for per-class error analysis on the 5-class arrhythmia task and the binary MI task
+- Handling of both multi-class (5-way) and binary (2-way) tasks, including merging and shuffling two separate CSV files into one labelled set
 
 ---
 
@@ -124,7 +170,7 @@ This architecture is not hard-coded the way the first two are. It is produced by
 - Matplotlib (only used to visualize sample predictions)
 - Jupyter Notebook
 
-No machine learning library is imported in either notebook. Pandas exists purely as a CSV reader and Matplotlib purely as an image viewer.
+No machine learning library is imported in any of the notebooks. Pandas exists purely as a CSV reader and Matplotlib purely as an image viewer.
 
 ---
 
@@ -195,21 +241,25 @@ $$W^{[l]} \sim \mathcal{N}\!\left(0,\ \tfrac{2}{n^{[l-1]}}\right), \qquad b^{[l]
 
 This is He initialization. It keeps the activation variance roughly steady as the signal moves through a deep ReLU stack, which is what you need to train the four-weight-layer `16 → 128 → 64 → 32 → 26` network without it blowing up or stalling.
 
+The ECG notebook leans on this even harder. Its source network is seven weight layers deep (`187 → 512 → 256 → 128 → 64 → 32 → 16 → 5`), and the same He initialization is what lets a stack that deep train at all with plain SGD and no normalization layers.
+
 ---
 
 ## Training Configuration
 
-| | MNIST Digits | Fashion MNIST | Letter Recognition |
-|---|---|---|---|
-| Architecture | 784 → 32 → 16 → 10 | 784 → 64 → 32 → 16 → 10 | 16 → 128 → 64 → 32 → 26 |
-| Initialization | Uniform $[-0.5, 0.5]$ | Uniform $[-0.5, 0.5]$ | He ($\sqrt{2/n_{\text{in}}}$) |
-| Learning rate ($\alpha$) | 0.1 | 0.1 | 0.02 |
-| Epochs | 500 | 200 | 200 |
-| Batch size | Full batch | 100 | 100 |
-| Train / dev split | 80 / 20 | 80 / 20 | 80 / 20 |
-| Train samples | 33,600 | 48,000 | 16,000 |
-| Dev samples | 8,400 | 12,000 | 4,000 |
-| Optimizer | Vanilla gradient descent | Mini-batch gradient descent | Mini-batch SGD with per-epoch shuffling |
+| | MNIST Digits | Fashion MNIST | Letter Recognition | ECG (MIT-BIH base) |
+|---|---|---|---|---|
+| Architecture | 784 → 32 → 16 → 10 | 784 → 64 → 32 → 16 → 10 | 16 → 128 → 64 → 32 → 26 | 187 → 512 → 256 → 128 → 64 → 32 → 16 → 5 |
+| Initialization | Uniform $[-0.5, 0.5]$ | Uniform $[-0.5, 0.5]$ | He ($\sqrt{2/n_{\text{in}}}$) | He ($\sqrt{2/n_{\text{in}}}$) |
+| Learning rate ($\alpha$) | 0.1 | 0.1 | 0.02 | 0.01 |
+| Epochs | 500 | 200 | 200 | 50 |
+| Batch size | Full batch | 100 | 100 | 1,000 |
+| Train / dev split | 80 / 20 | 80 / 20 | 80 / 20 | Predefined train/test |
+| Train samples | 33,600 | 48,000 | 16,000 | 87,553 |
+| Dev samples | 8,400 | 12,000 | 4,000 | 21,891 |
+| Optimizer | Vanilla gradient descent | Mini-batch gradient descent | Mini-batch SGD with per-epoch shuffling | Mini-batch SGD with per-epoch shuffling |
+
+The ECG **transfer head** is trained separately: a `32 → 20 → 10 → 2` network on top of the frozen feature extractor, He initialized, learning rate `0.001`, batch size `500`, 50 epochs, on the PTB dataset (80 / 20 split of 14,550 merged normal + abnormal heartbeats).
 
 ---
 
@@ -242,7 +292,14 @@ This is He initialization. It keeps the activation variance roughly steady as th
 - The first column is the letter label (`A`–`Z`); the remaining 16 columns are the features
 - 26 class labels, one per capital letter, encoded with `ord(c) - ord('A')`
 
-All three notebooks transpose the matrix after loading so that each column of `X` is one sample. This matches the convention used in the math (the matrices line up with $Z = W \cdot A$ rather than $Z = A \cdot W$), which keeps the code and the equations visually aligned.
+### ECG Heartbeat Recognition
+
+From the Kaggle [ECG Heartbeat Categorization](https://www.kaggle.com/datasets/shayanfazeli/heartbeat) dataset, which bundles two preprocessed ECG collections. Every signal is cropped, downsampled to 125 Hz, and zero-padded to a fixed length, so each row is a sequence of signal samples followed by a single class label in the last column.
+
+- **MIT-BIH Arrhythmia** (`mitbih_train.csv`, `mitbih_test.csv`) — ~109,000 heartbeats with 187 signal samples each, labelled into 5 rhythm classes: `N` (normal, 0), `S` (supraventricular, 1), `V` (ventricular, 2), `F` (fusion, 3), `Q` (unknown, 4). Ships with a predefined train/test split.
+- **PTB Diagnostic ECG** (`ptbdb_normal.csv`, `ptbdb_abnormal.csv`) — ~14,550 heartbeats in the same 187-sample format, split across two files by class: normal vs. abnormal (myocardial infarction). The notebook concatenates the two files, shuffles, and makes its own 80 / 20 split.
+
+All notebooks transpose the matrix after loading so that each column of `X` is one sample. This matches the convention used in the math (the matrices line up with $Z = W \cdot A$ rather than $Z = A \cdot W$), which keeps the code and the equations visually aligned.
 
 ---
 
@@ -252,18 +309,29 @@ All three notebooks transpose the matrix after loading so that each column of `X
 Numpy-only-Neural-Net/
 │
 ├── MNIST_Handwritten_Digits/
+│   ├── README.md
 │   ├── Digits-MNIST-Neural-Net.ipynb
 │   ├── train.csv
 │   └── test.csv
 │
 ├── MNIST_Fashion/
+│   ├── README.md
 │   ├── Fashion-MNIST-Neural-Net.ipynb
 │   ├── fashion-mnist_train.csv
 │   └── fashion-mnist_test.csv
 │
 ├── Letter_Recognition/
+│   ├── README.md
 │   ├── Letter_Recognition.ipynb
 │   └── letter-recognition.csv
+│
+├── ECG Heartbeat Recognition/
+│   ├── README.md
+│   ├── ECG_Heartbeat_Detection.ipynb
+│   ├── mitbih_train.csv
+│   ├── mitbih_test.csv
+│   ├── ptbdb_normal.csv
+│   └── ptbdb_abnormal.csv
 │
 ├── .gitattributes
 ├── .gitignore
@@ -271,7 +339,7 @@ Numpy-only-Neural-Net/
 └── README.MD
 ```
 
-The dataset CSV files are tracked with Git LFS.
+Each project folder also has its own `README.md` that goes into more depth on the individual project than this top-level overview. The dataset CSV files are tracked with Git LFS.
 
 ---
 
@@ -303,6 +371,26 @@ The wider train–dev gap is expected — Fashion MNIST is a substantially harde
 | Test set | 93.6% |
 
 This is the best result in the repo. With He initialization, the deeper `16 → 128 → 64 → 32 → 26` network, and shuffling every epoch, it fits the 16-feature data almost perfectly and still holds up in the low 90s on letters it hasn't seen.
+
+### ECG Heartbeat Recognition
+
+**Source task — MIT-BIH arrhythmia (5 classes):**
+
+| | Accuracy |
+|---|---|
+| Training set (after 50 epochs) | 96.93% |
+| Test set | 96.55% |
+
+The train and test numbers sit right on top of each other, so the deep base network generalizes cleanly with no real overfitting.
+
+**Transfer task — PTB myocardial infarction (binary):**
+
+| | Accuracy |
+|---|---|
+| Training set (head only, 50 epochs) | ~80% |
+| Test set | 75.56% |
+
+The interesting part is *how* this number was reached. The base network's first five layers were frozen and reused as a feature extractor, and only a small `32 → 20 → 10 → 2` head — under a thousand parameters — was trained on top. Without retraining a single weight of the original network, just the features it had already learned for arrhythmias carry enough signal to detect myocardial infarction at ~76%. That gap from the base task's 96% is the cost of never fine-tuning the body, and it's exactly the trade-off transfer learning is about.
 
 ---
 
@@ -346,6 +434,13 @@ Epoch :  190
 0.99...
 ```
 
+The ECG notebook prints a confusion matrix so you can see which classes get mixed up, not just the headline accuracy. For the 5-class arrhythmia task it is strongly diagonal, with the off-diagonal mass concentrated in the rarer rhythm classes:
+
+```text
+[[18118    65    ...]
+ [   ...   ...   ...]]   # rows = actual class, columns = predicted class
+```
+
 ---
 
 ## Run Locally
@@ -369,7 +464,7 @@ Launch Jupyter:
 jupyter notebook
 ```
 
-Then open `MNIST_Handwritten_Digits/Digits-MNIST-Neural-Net.ipynb` first, work through it, move on to `MNIST_Fashion/Fashion-MNIST-Neural-Net.ipynb`, and finish with `Letter_Recognition/Letter_Recognition.ipynb`.
+Then open `MNIST_Handwritten_Digits/Digits-MNIST-Neural-Net.ipynb` first, work through it, move on to `MNIST_Fashion/Fashion-MNIST-Neural-Net.ipynb`, then `Letter_Recognition/Letter_Recognition.ipynb`, and finish with `ECG Heartbeat Recognition/ECG_Heartbeat_Detection.ipynb`.
 
 The dataset CSVs are tracked with Git LFS. If `git clone` does not pull them automatically, install Git LFS and run `git lfs pull`.
 
@@ -381,12 +476,14 @@ The roadmap for turning this implementation into a more general scratch-built de
 
 - **Initialization:** Replace uniform `[-0.5, 0.5]` initialization with He initialization for ReLU layers — done in the Letter Recognition notebook
 - **Architecture:** Support dynamic layer specification so a new architecture is one list change away — done in the Letter Recognition notebook; the passes now loop over parameter lists
+- **Transfer learning:** Freeze a trained network's early layers and train a new head on a different task — done in the ECG notebook
+- **Diagnostics:** Add a confusion matrix for per-class error analysis — done in the ECG notebook; loss-curve plots are still to come
+- **Datasets:** Extend beyond image classification to tabular and binary tasks — done across the Letter Recognition (tabular, 26-class) and ECG (signal, binary + multi-class) notebooks
 - **Optimization:** Implement momentum, RMSProp, and Adam
 - **Regularization:** Add dropout and L2 weight decay
 - **Persistence:** Add weight serialization for saving and loading trained networks
 - **Refactoring:** Move from notebooks to a clean Python package with reusable layer, optimizer, and loss classes
-- **Diagnostics:** Add explicit loss curves and confusion matrix visualizations
-- **Datasets:** Extend beyond image classification to a tabular and a binary classification example
+- **Fine-tuning:** Unfreeze the transferred ECG layers and fine-tune the whole network end to end, to close the gap from the frozen-feature 75% toward the base task's 96%
 
 ---
 
@@ -402,6 +499,9 @@ Building this from scratch made the following concrete in a way that using a fra
 - Seeing the difference mini-batching makes to both training speed and gradient stability
 - Turning hand-written layers into a loop, and getting the forward/backward indexing right once it's written in terms of the layer count instead of fixed names
 - Seeing for myself how much He initialization and per-epoch shuffling actually help on a deeper network
+- Understanding transfer learning from the inside — that "freezing layers" is just running a forward pass once and training a new head on the activations, with no magic involved
+- Reading a confusion matrix to find *where* a classifier fails, instead of trusting a single accuracy number
+- Feeling the trade-off transfer learning makes: reusing frozen features is cheap and fast, but leaves accuracy on the table compared to training end to end
 
 ---
 
